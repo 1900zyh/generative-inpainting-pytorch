@@ -102,3 +102,13 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+
+*.jpg
+*.png 
+*.ckpt 
+*.pth 
+events*
+debug.*
+__pycache__
+__init__.py
