@@ -22,8 +22,8 @@ class Generator(nn.Module):
 
     def forward(self, x, mask):
         x_stage1 = self.coarse_generator(x, mask)
-        x_stage2, offset_flow = self.fine_generator(x, x_stage1, mask)
-        return x_stage1, x_stage2, offset_flow
+        x_stage2 = self.fine_generator(x, x_stage1, mask)
+        return x_stage1, x_stage2
 
 
 class CoarseGenerator(nn.Module):
@@ -148,7 +148,7 @@ class FineGenerator(nn.Module):
         x = self.pmconv4_downsample(x)
         x = self.pmconv5(x)
         x = self.pmconv6(x)
-        x, offset_flow = self.contextul_attention(x, x, mask)
+        x = self.contextul_attention(x, x, mask)
         x = self.pmconv9(x)
         x = self.pmconv10(x)
         pm = x
@@ -165,7 +165,7 @@ class FineGenerator(nn.Module):
         x = self.allconv17(x)
         x_stage2 = torch.clamp(x, -1., 1.)
 
-        return x_stage2, offset_flow
+        return x_stage2
 
 
 class ContextualAttention(nn.Module):

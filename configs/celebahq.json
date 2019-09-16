@@ -21,31 +21,15 @@
         "batch_size": 16,
         "num_workers": 4
     },
-    "losses": [
-        {
-            "name": "coarse_l1_alpha",
-            "spatial_discounting_gamma": 0.9,
-            "weight": 1.2,
-            "input": "RGB"
-        },
-        {
-            "name": "l1_loss_alpha",
-            "weight": 1.2,
-            "input": "RGB"
-        },
-        {
-            "name": "ae_loss_alpha",
-            "weight": 1.2,
-            "input": "RGB"
-        },
-        {
-            "name": "gan_loss_alpha",
-            "weight": 0.001,
-            "input": "RGB",
-            "global_wgan_loss_alpha": 1,
-            "wgan_gp_lambda": 10
-        }
-    ],
+    "losses": {
+        "coarse_l1_alpha": 1.2,
+        "l1_loss_alpha": 1.2,
+        "ae_loss_alpha": 1.2,
+        "gan_loss_alpha": 0.001,
+        "global_wgan_loss_alpha": 1,
+        "wgan_gp_lambda": 10,
+        "ae_loss_alpha": 1.2
+    },
     "metrics": [
         "rmse",
         "psnr",
@@ -54,25 +38,18 @@
     "optimizer": {
         "type": "Adam",
         "lr": 0.0001,
+        "beta1": 0.5,
+        "beta2": 0.9,
         "weight_decay": 0,
         "amsgrad": true
-    },
-    "lr_scheduler": {
-        "type": "StepLR",
-        "step_size": 100000,
-        "gamma": 0.97
     },
     "trainer": {
         "iterations": 200000,
         "save_freq": 10000,
         "valid_freq": 20000,
         "verbosity": 2,
-        "monitor": "test0_p_dist",
-        "monitor_mode": "min",
         "mask_only": true,
-        "pretrained_load_strict": false,
-        "beta1": 0.5,
-        "beta2": 0.9
+        "n_critic": 5
     },
     "logger": {
         "log_step": 100,

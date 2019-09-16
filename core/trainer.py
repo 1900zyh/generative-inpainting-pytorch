@@ -1,165 +1,185 @@
 import os
+import time
+import datetime
+from PIL import Image
+
 import torch
 import torch.nn as nn
 from torch import autograd
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 
-
+from core.base_trainer import BaseTrainer
 from core.model import Generator, LocalDis, GlobalDis
 from core.utils import get_model_list, local_patch, spatial_discounting_mask
+from core.utils import random_bbox, mask_image, postprocess
+from torchvision.utils import make_grid, save_image
+
+from core.utils import set_device, Progbar
 
 
-class Trainer(nn.Module):
+
+class Trainer(BaseTrainer):
   def __init__(self, config):
-      super(Trainer, self).__init__()
-      self.config = config
-      self.netG = Generator(self.config['netG'], self.use_cuda, self.device_ids)
-      self.localD = LocalDis(self.config['netD'], self.use_cuda, self.device_ids)
-      self.globalD = GlobalDis(self.config['netD'], self.use_cuda, self.device_ids)
+    # setup models 
+    self.netG = set_device(Generator(self.config['netG']))
+    self.localD = set_device(LocalDis(self.config['netD']))
+    self.globalD = set_device(GlobalDis(self.config['netD']))
+    self.optimG = torch.optim.Adam(self.netG.parameters(), lr=self.config['optimizer']['lr'],
+      betas=(self.config['optimizer']['beta1'], self.config['optimizer']['beta2']))
+    self.optimD = torch.optim.Adam(list(self.localD.parameters()) + list(self.globalD.parameters()), lr=config['lr'],
+      betas=(self.config['optimizer']['beta1'], self.config['optimizer']['beta2']))
+    self._load()
+    if config['distributed']:
+      self.netG = DDP(self.netG, device_ids=[config['global_rank']], output_device=config['global_rank'], 
+        broadcast_buffers=True)#, find_unused_parameters=False)
+      self.localD = DDP(self.localD, device_ids=[config['global_rank']], output_device=config['global_rank'], 
+        broadcast_buffers=True)#, find_unused_parameters=False)
+      self.globalD = DDP(self.globalD, device_ids=[config['global_rank']], output_device=config['global_rank'], 
+        broadcast_buffers=True)#, find_unused_parameters=False)
+    
 
-      self.optimizer_g = torch.optim.Adam(self.netG.parameters(), lr=self.config['lr'],
-                                          betas=(self.config['beta1'], self.config['beta2']))
-      d_params = list(self.localD.parameters()) + list(self.globalD.parameters())
-      self.optimizer_d = torch.optim.Adam(d_params, lr=config['lr'],
-                                          betas=(self.config['beta1'], self.config['beta2']))
-      if self.use_cuda:
-          self.netG.to(self.device_ids[0])
-          self.localD.to(self.device_ids[0])
-          self.globalD.to(self.device_ids[0])
+  def _train_epoch(self, x, bboxes, masks):
+    progbar = Progbar(len(self.train_dataset), width=20, stateful_metrics=['epoch', 'iter'])
+    for ground_truth, _, names in self.train_loader:
+      self.iteration += 1
+      end = time.time()
+      bboxes = random_bbox(self.config, batch_size=ground_truth.size(0))
+      x, mask = mask_image(ground_truth, bboxes, self.config)
 
-  def forward(self, x, bboxes, masks, ground_truth, compute_loss_g=False):
-      self.train()
       losses = {}
-
-      x1, x2, offset_flow = self.netG(x, masks)
+      x1, x2 = self.netG(x, masks)
       local_patch_gt = local_patch(ground_truth, bboxes)
       x1_inpaint = x1 * masks + x * (1. - masks)
       x2_inpaint = x2 * masks + x * (1. - masks)
       local_patch_x1_inpaint = local_patch(x1_inpaint, bboxes)
       local_patch_x2_inpaint = local_patch(x2_inpaint, bboxes)
 
-      ## D part
-      # wgan d loss
-      local_patch_real_pred, local_patch_fake_pred = \
-          self.dis_forward(self.localD, local_patch_gt, local_patch_x2_inpaint.detach())
-      global_real_pred, global_fake_pred = \
-          self.dis_forward(self.globalD, ground_truth, x2_inpaint.detach())
+      # compute losses
+      local_patch_real_pred, local_patch_fake_pred = self.dis_forward(self.localD, local_patch_gt, local_patch_x2_inpaint.detach())
+      global_real_pred, global_fake_pred = self.dis_forward(self.globalD, ground_truth, x2_inpaint.detach())
       losses['wgan_d'] = torch.mean(local_patch_fake_pred - local_patch_real_pred) \
-                          + torch.mean(global_fake_pred - global_real_pred) * self.config['global_wgan_loss_alpha']
+                          + torch.mean(global_fake_pred - global_real_pred) * self.config['losses']['global_wgan_loss_alpha']
       # gradients penalty loss
       local_penalty = self.calc_gradient_penalty(self.localD, local_patch_gt, local_patch_x2_inpaint.detach())
       global_penalty = self.calc_gradient_penalty(self.globalD, ground_truth, x2_inpaint.detach())
       losses['wgan_gp'] = local_penalty + global_penalty
 
       ## G part
-      if compute_loss_g:
-          sd_mask = spatial_discounting_mask(self.config)
-          losses['l1'] = nn.L1Loss()(local_patch_x1_inpaint * sd_mask, local_patch_gt * sd_mask) \
-                          * self.config['coarse_l1_alpha'] \
-                          + nn.L1Loss()(local_patch_x2_inpaint * sd_mask, local_patch_gt * sd_mask)
-          losses['ae'] = nn.L1Loss()(x1 * (1. - masks), ground_truth * (1. - masks)) \
-                          * self.config['coarse_l1_alpha'] \
-                          + nn.L1Loss()(x2 * (1. - masks), ground_truth * (1. - masks))
-          # wgan g loss
-          local_patch_real_pred, local_patch_fake_pred = \
-              self.dis_forward(self.localD, local_patch_gt, local_patch_x2_inpaint)
-          global_real_pred, global_fake_pred = self.dis_forward(self.globalD, ground_truth, x2_inpaint)
+      if self.iteration % self.config['trainer']['n_critic']:
+        sd_mask = spatial_discounting_mask(self.config)
+        losses['l1'] = nn.L1Loss()(local_patch_x1_inpaint * sd_mask, local_patch_gt * sd_mask) \
+                        * self.config['coarse_l1_alpha'] \
+                        + nn.L1Loss()(local_patch_x2_inpaint * sd_mask, local_patch_gt * sd_mask)
+        losses['ae'] = nn.L1Loss()(x1 * (1. - masks), ground_truth * (1. - masks)) \
+                        * self.config['coarse_l1_alpha'] \
+                        + nn.L1Loss()(x2 * (1. - masks), ground_truth * (1. - masks))
+        # wgan g loss
+        local_patch_real_pred, local_patch_fake_pred = self.dis_forward(self.localD, local_patch_gt, local_patch_x2_inpaint)
+        global_real_pred, global_fake_pred = self.dis_forward(self.globalD, ground_truth, x2_inpaint)
+        losses['wgan_g'] = - torch.mean(local_patch_fake_pred) - torch.mean(global_fake_pred) * self.config['global_wgan_loss_alpha']
 
-          losses['wgan_g'] = - torch.mean(local_patch_fake_pred) \
-                              - torch.mean(global_fake_pred) * self.config['global_wgan_loss_alpha']
+      # Scalars from different devices are gathered into vectors
+      for k in losses.keys():
+        if not losses[k].dim() == 0:
+          losses[k] = torch.mean(losses[k])
 
-      return losses, x2_inpaint, offset_flow
+      ###### Backward pass ######
+      # Update D
+      self.optimD.zero_grad()
+      losses['d'] = losses['wgan_d'] + losses['wgan_gp'] * self.config['losses']['wgan_gp_lambda']
+      losses['d'].backward()
+      self.optimD.step()
+      # Update G
+      if self.iteration % self.config['trainer']['n_critic']:
+        self.optimG.zero_grad()
+        losses['g'] = losses['l1'] * self.config['losses']['l1_loss_alpha'] \
+                      + losses['ae'] * self.config['losses']['ae_loss_alpha'] \
+                      + losses['wgan_g'] * self.config['losses']['gan_loss_alpha']
+        losses['g'].backward()
+        self.optimG.step()
+    
+      # logs
+      new_mae = torch.mean(torch.abs(ground_truth - x2)) / torch.mean(masks)
+      mae = new_mae if mae == 0 else (new_mae+mae)/2
+      speed = ground_truth.size(0)/(time.time() - end)*self.config['world_size']
+      logs = [("epoch", self.epoch),("iter", self.iteration),("lr", self.get_lr()),
+        ('mae', mae.item()), ('samples/s', speed)]
+      if self.config['global_rank'] == 0:
+        progbar.add(len(ground_truth)*self.config['world_size'], values=logs \
+          if self.train_args['verbosity'] else [x for x in logs if not x[0].startswith('l_')])
+
+      # saving and evaluating
+      if self.iteration % self.train_args['save_freq'] == 0:
+        self._save(self.iteration//self.train_args['save_freq'])
+      if self.iteration % self.train_args['valid_freq'] == 0:
+        self._eval_epoch(self.iteration//self.train_args['save_freq'])
+        if self.config['global_rank'] == 0:
+          print('[**] Training till {} in Rank {}\n'.format(
+            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), self.config['global_rank']))
+      if self.iteration > self.config['trainer']['iterations']:
+        break
+
 
   def dis_forward(self, netD, ground_truth, x_inpaint):
-      assert ground_truth.size() == x_inpaint.size()
-      batch_size = ground_truth.size(0)
-      batch_data = torch.cat([ground_truth, x_inpaint], dim=0)
-      batch_output = netD(batch_data)
-      real_pred, fake_pred = torch.split(batch_output, batch_size, dim=0)
+    assert ground_truth.size() == x_inpaint.size()
+    batch_size = ground_truth.size(0)
+    batch_data = torch.cat([ground_truth, x_inpaint], dim=0)
+    batch_output = netD(batch_data)
+    real_pred, fake_pred = torch.split(batch_output, batch_size, dim=0)
 
-      return real_pred, fake_pred
+    return real_pred, fake_pred
 
   # Calculate gradient penalty
   def calc_gradient_penalty(self, netD, real_data, fake_data):
-      batch_size, channel, height, width = real_data.size()
-      alpha = torch.rand(batch_size, 1)
-      alpha = alpha.expand(batch_size, int(real_data.nelement() // batch_size)).contiguous() \
-          .view(batch_size, channel, height, width)
-      if self.use_cuda:
-          alpha = alpha.cuda()
+    batch_size, channel, height, width = real_data.size()
+    alpha = torch.rand(batch_size, 1)
+    alpha = alpha.expand(batch_size, int(real_data.nelement() // batch_size)).contiguous() \
+        .view(batch_size, channel, height, width)
+    alpha = set_device(alpha)
 
-      interpolates = alpha * real_data + ((1 - alpha) * fake_data)
-      interpolates = autograd.Variable(interpolates, requires_grad=True)
+    interpolates = alpha * real_data + ((1 - alpha) * fake_data)
+    interpolates = autograd.Variable(interpolates, requires_grad=True)
+    disc_interpolates = netD(interpolates)
 
-      disc_interpolates = netD(interpolates)
+    grad_outputs = torch.ones(disc_interpolates.size())
+    grad_outputs = set_device(grad_outputs)
+    gradients = autograd.grad(outputs=disc_interpolates, inputs=interpolates,
+      grad_outputs=grad_outputs, create_graph=True, retain_graph=True, only_inputs=True)[0]
+    gradients = gradients.view(gradients.size(0), -1)
+    gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
 
-      grad_outputs = torch.ones(disc_interpolates.size())
-      if self.use_cuda:
-          grad_outputs = grad_outputs.cuda()
-      gradients = autograd.grad(outputs=disc_interpolates, inputs=interpolates,
-                                grad_outputs=grad_outputs,
-                                create_graph=True, retain_graph=True, only_inputs=True)[0]
-      gradients = gradients.view(gradients.size(0), -1)
+    return gradient_penalty
 
-      gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+  def _eval_epoch(self, it):
+    self.valid_sampler.set_epoch(it)
+    path = os.path.join(self.config['save_dir'], 'samples_{}'.format(str(it).zfill(5)))
+    os.makedirs(path, exist_ok=True)
+    if self.config['global_rank'] == 0:
+      print('start evaluating ...')
+    evaluation_scores = {key: 0 for key,val in self.metrics.items()}
+    index = 0
+    for images, masks, names in self.valid_loader:
+      inpts = images*masks
+      images, inpts, masks = set_device([images, inpts, masks])
+      with torch.no_grad():
+        output, _ = self.netG(inpts, masks)
+      grid_img = make_grid(torch.cat([(images+1)/2, (masks*images+1)/2,
+        (output+1)/2, (masks*images+(1-masks)*output+1)/2], dim=0), nrow=4)
+      save_image(grid_img, os.path.join(path, '{}_stack.png'.format(names[0].split('.')[0])))
+      orig_imgs = postprocess(images)
+      comp_imgs = postprocess(masks*images+(1-masks)*output)
+      Image.fromarray(orig_imgs[0]).save(os.path.join(path, '{}_orig.png'.format(names[0].split('.')[0])))
+      Image.fromarray(comp_imgs[0]).save(os.path.join(path, '{}_comp.png'.format(names[0].split('.')[0])))
+      for key, val in self.metrics.items():
+        evaluation_scores[key] += val(orig_imgs, comp_imgs)
+      index += 1
+    for key, val in evaluation_scores.items():
+      tensor = set_device(torch.FloatTensor([val/index]))
+      dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+      evaluation_scores[key] = tensor.cpu().item()
+    evaluation_message = ' '.join(['{}: {:5f},'.format(key, val/self.config['world_size']) \
+                        for key,val in evaluation_scores.items()])
+    if self.config['global_rank'] == 0:
+      print('[**] Evaluation: {}'.format(evaluation_message))
 
-      return gradient_penalty
-
-  def inference(self, x, masks):
-      self.eval()
-      x1, x2, offset_flow = self.netG(x, masks)
-      # x1_inpaint = x1 * masks + x * (1. - masks)
-      x2_inpaint = x2 * masks + x * (1. - masks)
-
-      return x2_inpaint, offset_flow
-
-  def save_model(self, checkpoint_dir, iteration):
-      # Save generators, discriminators, and optimizers
-      gen_name = os.path.join(checkpoint_dir, 'gen_%08d.pt' % iteration)
-      dis_name = os.path.join(checkpoint_dir, 'dis_%08d.pt' % iteration)
-      opt_name = os.path.join(checkpoint_dir, 'optimizer.pt')
-      torch.save(self.netG.state_dict(), gen_name)
-      torch.save({'localD': self.localD.state_dict(), 'globalD': self.globalD.state_dict()}, dis_name)
-      torch.save({'gen': self.optimizer_g.state_dict(), 'dis': self.optimizer_d.state_dict()}, opt_name)
-
-  def resume(self, checkpoint_dir, iteration=0, test=False):
-      # Load generators
-      last_model_name = get_model_list(checkpoint_dir, "gen", iteration=iteration)
-      self.netG.load_state_dict(torch.load(last_model_name))
-      iteration = int(last_model_name[-11:-3])
-
-      if not test:
-          # Load discriminators
-          last_model_name = get_model_list(checkpoint_dir, "dis", iteration=iteration)
-          state_dict = torch.load(last_model_name)
-          self.localD.load_state_dict(state_dict['localD'])
-          self.globalD.load_state_dict(state_dict['globalD'])
-          # Load optimizers
-          state_dict = torch.load(os.path.join(checkpoint_dir, 'optimizer.pt'))
-          self.optimizer_d.load_state_dict(state_dict['dis'])
-          self.optimizer_g.load_state_dict(state_dict['gen'])
-
-      print("Resume from {} at iteration {}".format(checkpoint_dir, iteration))
-
-      return iteration
-
-          losses, inpainted_result, offset_flow = trainer(x, bboxes, mask, ground_truth, compute_g_loss)
-          # Scalars from different devices are gathered into vectors
-          for k in losses.keys():
-              if not losses[k].dim() == 0:
-                  losses[k] = torch.mean(losses[k])
-
-          ###### Backward pass ######
-          # Update D
-          trainer_module.optimizer_d.zero_grad()
-          losses['d'] = losses['wgan_d'] + losses['wgan_gp'] * config['wgan_gp_lambda']
-          losses['d'].backward()
-          trainer_module.optimizer_d.step()
-
-          # Update G
-          if compute_g_loss:
-              trainer_module.optimizer_g.zero_grad()
-              losses['g'] = losses['l1'] * config['l1_loss_alpha'] \
-                            + losses['ae'] * config['ae_loss_alpha'] \
-                            + losses['wgan_g'] * config['gan_loss_alpha']
-              losses['g'].backward()
-              trainer_module.optimizer_g.step()

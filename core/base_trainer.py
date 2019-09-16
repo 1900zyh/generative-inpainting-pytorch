@@ -31,8 +31,6 @@ class BaseTrainer():
     self.config = config
     self.epoch = 0
     self.iteration = 0
-    self.vgg =  VGG16FeatureExtractor()
-    self.vgg = set_device(self.vgg)
 
     # setup data set and data loader
     self.train_dataset = Dataset(config['data_loader'], debug=debug, split='train')
@@ -53,29 +51,13 @@ class BaseTrainer():
       batch_size= 1, shuffle=None, num_workers=config['data_loader']['num_workers'],
       pin_memory=True, sampler=self.valid_sampler, worker_init_fn=worker_init_fn)
 
-    # set loss functions and evaluation metrics
-    self.losses = {entry['name']: (
-        getattr(module_loss, entry['name']),
-        entry['weight'], 
-        entry['input']
-      ) for entry in config['losses']}
+    # set tup matrics
     self.metrics = {met: getattr(module_metric, met) for met in config['metrics']}
-
-    # setup models 
-    self.model = set_device(PConvUNet())
-    self.optim_args = self.config['optimizer']
-    self.optim = optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()),
-      lr = self.optim_args['lr'])
-    self._load()
-    if config['distributed']:
-      self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
-      self.model = DDP(self.model, device_ids=[config['global_rank']], output_device=config['global_rank'], 
-        broadcast_buffers=True)#, find_unused_parameters=False)
-    
-    # set summary writer
-    self.writer = None
+    self.dis_writer = None
+    self.gen_writer = None
     if self.config['global_rank'] == 0 or (not config['distributed']):
-      self.writer = SummaryWriter(os.path.join(config['save_dir'], 'logs'))
+      self.dis_writer = SummaryWriter(os.path.join(config['save_dir'], 'dis'))
+      self.gen_writer = SummaryWriter(os.path.join(config['save_dir'], 'gen'))
     self.samples_path = os.path.join(config['save_dir'], 'samples')
     self.results_path = os.path.join(config['save_dir'], 'results')
     
@@ -83,29 +65,14 @@ class BaseTrainer():
     self.log_args = self.config['logger']
     self.train_args = self.config['trainer']
 
-  # get current learning rate
-  def get_lr(self):
-    return self.optim.param_groups[0]['lr']
 
   def add_summary(self, writer, name, val):
     if writer is not None and self.iteration % self.log_args['log_step'] == 0:
       writer.add_scalar(name, val, self.iteration)
 
-  def get_non_gan_loss(self, outputs, videos, masks):
-    non_gan_losses = []
-    outputs_feat = self.vgg(outputs)
-    videos_feat = self.vgg(videos)
-    for loss_name, (loss_instance, loss_weight, input_type) in self.losses.items():
-      if loss_weight > 0.0:
-        if input_type == 'RGB':
-          loss = loss_instance(outputs, videos, masks)
-        elif input_type == 'feat':
-          loss = loss_instance(outputs_feat, videos_feat, masks)
-        loss *= loss_weight
-        self.add_summary(self.writer, f'loss/{loss_name}', loss.item())
-        non_gan_losses.append(loss)
-    return sum(non_gan_losses)
-
+  # get current learning rate
+  def get_lr(self):
+    return self.optimG.param_groups[0]['lr']
 
   def train(self):
     while True:
@@ -117,6 +84,23 @@ class BaseTrainer():
         break
     print('\nEnd training....')
 
+  # save parameters every eval_epoch
+  def _save(self, it):
+    if self.config['global_rank'] == 0:
+      gen_path = os.path.join(self.config['save_dir'], 'gen_{}.pth'.format(str(it).zfill(5)))
+      dis_path = os.path.join(self.config['save_dir'], 'dis_{}.pth'.format(str(it).zfill(5)))
+      print('\nsaving model to {} ...'.format(gen_path))
+      if isinstance(self.netG, torch.nn.DataParallel) or isinstance(self.netG, DDP):
+        netG, localD, globalD = self.netG.module, self.localD.module, self.globalD.module
+      else:
+        netG, localD, globalD = self.netG.module, self.localD.module, self.globalD.module
+      torch.save({'netG': netG.state_dict()}, gen_path)
+      torch.save({'epoch': self.epoch, 'iteration': self.iteration,
+                  'localD': localD.state_dict(), 
+                  'globalD': globalD.state_dict(),
+                  'optimG': self.optimG.state_dict(),
+                  'optimD': self.optimD.state_dict()}, dis_path)
+      os.system('echo {} > {}'.format(str(it).zfill(5), os.path.join(self.config['save_dir'], 'latest.ckpt')))
 
   # load model parameters
   def _load(self):
@@ -128,34 +112,26 @@ class BaseTrainer():
       ckpts.sort()
       latest_epoch = ckpts[-1] if len(ckpts)>0 else None
     if latest_epoch is not None:
-      path = os.path.join(model_path, latest_epoch+'.pth')
+      gen_path = os.path.join(model_path, 'gen_{}.pth'.format(str(latest_epoch).zfill(5)))
+      dis_path = os.path.join(model_path, 'dis_{}.pth'.format(str(latest_epoch).zfill(5)))
       if self.config['global_rank'] == 0:
-        print('Loading model from {}...'.format(path))
-      data = torch.load(path, map_location = lambda storage, loc: set_device(storage)) 
-      model_dict = self.model.state_dict()
-      pretrained_dict = {k:v for k,v in data['model'].items() if k in model_dict}
-      model_dict.update(pretrained_dict)
-      self.model.load_state_dict(model_dict)
-      self.optim.load_state_dict(data['optim'])
+        print('Loading model from {}...'.format(gen_path))
+      data = torch.load(gen_path, map_location = lambda storage, loc: set_device(storage)) 
+      netG_dict = self.netG.state_dict()
+      pretrained_dict = {k:v for k,v in data['netG'].items() if k in netG_dict}
+      netG_dict.update(pretrained_dict)
+      self.netG_dict.load_state_dict(netG_dict)
+      data = torch.load(dis_path, map_location = lambda storage, loc: set_device(storage)) 
+      self.optimG.load_state_dict(data['optimG'])
+      self.optimD.load_state_dict(data['optimD'])
+      self.localD.load_state_dict(data['localD'])
+      self.globalD.load_state_dict(data['globalD'])
       self.epoch = data['epoch']
       self.iteration = data['iteration']
     else:
       if self.config['global_rank'] == 0:
         print('Warnning: There is no trained model found. An initialized model will be used.')
       
-  # save parameters every eval_epoch
-  def _save(self, it):
-    if self.config['global_rank'] == 0:
-      path = os.path.join(self.config['save_dir'], str(it).zfill(5)+'.pth')
-      print('\nsaving model to {} ...'.format(path))
-      if isinstance(self.model, torch.nn.DataParallel) or isinstance(self.model, DDP):
-        model = self.model.module
-      else:
-        model = self.model
-      torch.save({'model': model.state_dict(), 
-        'optim': self.optim.state_dict(),
-        'epoch': self.epoch, 'iteration': self.iteration, }, path)
-      os.system('echo {} > {}'.format(str(it).zfill(5), os.path.join(self.config['save_dir'], 'latest.ckpt')))
 
   # process input and calculate loss every training epoch
   def _train_epoch(self,):

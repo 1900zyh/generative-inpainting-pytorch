@@ -54,7 +54,7 @@ def set_device(args):
   return args
 
 def postprocess(img):
-  img = unnormalize(img)*255
+  img = (img+1.)/2*255
   img = img.permute(0,2,3,1)
   img = img.int().cpu().numpy().astype(np.uint8)
   return img
