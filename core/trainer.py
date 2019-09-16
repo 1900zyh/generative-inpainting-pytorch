@@ -11,7 +11,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from core.base_trainer import BaseTrainer
 from core.model import Generator, LocalDis, GlobalDis
-from core.utils import get_model_list, local_patch, spatial_discounting_mask
+from core.utils import local_patch, spatial_discounting_mask
 from core.utils import random_bbox, mask_image, postprocess
 from torchvision.utils import make_grid, save_image
 
@@ -20,14 +20,15 @@ from core.utils import set_device, Progbar
 
 
 class Trainer(BaseTrainer):
-  def __init__(self, config):
+  def __init__(self, config, debug=False):
+    super().__init__(config, debug=debug)
     # setup models 
     self.netG = set_device(Generator(self.config['netG']))
     self.localD = set_device(LocalDis(self.config['netD']))
     self.globalD = set_device(GlobalDis(self.config['netD']))
     self.optimG = torch.optim.Adam(self.netG.parameters(), lr=self.config['optimizer']['lr'],
       betas=(self.config['optimizer']['beta1'], self.config['optimizer']['beta2']))
-    self.optimD = torch.optim.Adam(list(self.localD.parameters()) + list(self.globalD.parameters()), lr=config['lr'],
+    self.optimD = torch.optim.Adam(list(self.localD.parameters()) + list(self.globalD.parameters()), lr=config['optimizer']['lr'],
       betas=(self.config['optimizer']['beta1'], self.config['optimizer']['beta2']))
     self._load()
     if config['distributed']:
@@ -39,13 +40,14 @@ class Trainer(BaseTrainer):
         broadcast_buffers=True)#, find_unused_parameters=False)
     
 
-  def _train_epoch(self, x, bboxes, masks):
+  def _train_epoch(self):
     progbar = Progbar(len(self.train_dataset), width=20, stateful_metrics=['epoch', 'iter'])
     for ground_truth, _, names in self.train_loader:
       self.iteration += 1
       end = time.time()
+      ground_truth = set_device(ground_truth)
       bboxes = random_bbox(self.config, batch_size=ground_truth.size(0))
-      x, mask = mask_image(ground_truth, bboxes, self.config)
+      x, masks = mask_image(ground_truth, bboxes, self.config)
 
       losses = {}
       x1, x2 = self.netG(x, masks)
@@ -69,10 +71,10 @@ class Trainer(BaseTrainer):
       if self.iteration % self.config['trainer']['n_critic']:
         sd_mask = spatial_discounting_mask(self.config)
         losses['l1'] = nn.L1Loss()(local_patch_x1_inpaint * sd_mask, local_patch_gt * sd_mask) \
-                        * self.config['coarse_l1_alpha'] \
+                        * self.config['losses']['coarse_l1_alpha'] \
                         + nn.L1Loss()(local_patch_x2_inpaint * sd_mask, local_patch_gt * sd_mask)
         losses['ae'] = nn.L1Loss()(x1 * (1. - masks), ground_truth * (1. - masks)) \
-                        * self.config['coarse_l1_alpha'] \
+                        * self.config['losses']['coarse_l1_alpha'] \
                         + nn.L1Loss()(x2 * (1. - masks), ground_truth * (1. - masks))
         # wgan g loss
         local_patch_real_pred, local_patch_fake_pred = self.dis_forward(self.localD, local_patch_gt, local_patch_x2_inpaint)

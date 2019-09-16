@@ -10,7 +10,7 @@
         "ndf": 64
     },
     "data_loader": {
-        "name": "celebahq", 
+        "name": "places2", 
         "zip_root": "../datazip",
         "flist_root": "../flist",
         "w": 512,
@@ -45,7 +45,7 @@
         "amsgrad": true
     },
     "trainer": {
-        "iterations": 200000,
+        "iterations": 1000000,
         "save_freq": 10000,
         "valid_freq": 20000,
         "verbosity": 2,

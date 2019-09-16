@@ -7,8 +7,8 @@ from PIL import Image
 from torchvision import transforms
 from torchvision import utils as vutils
 
-from utils.tools import extract_image_patches, flow_to_image, \
-    reduce_mean, reduce_sum, default_loader, same_padding
+from core.utils import extract_image_patches, flow_to_image, \
+    reduce_mean, reduce_sum, same_padding, set_device
 
 
 class Generator(nn.Module):
@@ -53,7 +53,7 @@ class CoarseGenerator(nn.Module):
 
     def forward(self, x, mask):
         # For indicating the boundaries of images
-        ones = torch.ones(x.size(0), 1, x.size(2), x.size(3))
+        ones = set_device(torch.ones(x.size(0), 1, x.size(2), x.size(3)))
         # 5 x 256 x 256
         x = self.conv1(torch.cat([x, ones, mask], dim=1))
         x = self.conv2_downsample(x)
@@ -127,7 +127,7 @@ class FineGenerator(nn.Module):
     def forward(self, xin, x_stage1, mask):
         x1_inpaint = x_stage1 * mask + xin * (1. - mask)
         # For indicating the boundaries of images
-        ones = torch.ones(xin.size(0), 1, xin.size(2), xin.size(3))
+        ones = set_device(torch.ones(xin.size(0), 1, xin.size(2), xin.size(3)))
         # conv branch
         xnow = torch.cat([x1_inpaint, ones, mask], dim=1)
         x = self.conv1(xnow)
@@ -250,7 +250,7 @@ class ContextualAttention(nn.Module):
         offsets = []
         k = self.fuse_k
         scale = self.softmax_scale    # to fit the PyTorch tensor image value range
-        fuse_weight = torch.eye(k).view(1, 1, k, k)  # 1*1*k*k
+        fuse_weight = set_device(torch.eye(k).view(1, 1, k, k))  # 1*1*k*k
 
         for xi, wi, raw_wi in zip(f_groups, w_groups, raw_w_groups):
             '''
@@ -261,7 +261,7 @@ class ContextualAttention(nn.Module):
             raw_wi : separated tensor along batch dimension of back; (B=1, I=32*32, O=128, KH=4, KW=4)
             '''
             # conv for compare
-            escape_NaN = torch.FloatTensor([1e-4])
+            escape_NaN = set_device(torch.FloatTensor([1e-4]))
             wi = wi[0]  # [L, C, k, k]
             max_wi = torch.max(torch.sqrt(reduce_sum(torch.pow(wi, 2),
                                                      axis=[1, 2, 3],
@@ -396,7 +396,7 @@ class GlobalDis(nn.Module):
         self.cnum = config['ndf']
 
         self.dis_conv_module = DisConvModule(self.input_dim, self.cnum)
-        self.linear = nn.Linear(self.cnum*4*16*16, 1)
+        self.linear = nn.Linear(self.cnum*4*32*32, 1)
 
     def forward(self, x):
         x = self.dis_conv_module(x)

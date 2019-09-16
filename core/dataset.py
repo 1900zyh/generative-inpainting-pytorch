@@ -56,7 +56,9 @@ class Dataset(torch.utils.data.Dataset):
       mask = transforms.RandomHorizontalFlip()(mask)
       mask = mask.rotate(random.randint(0,45), expand=True)
       mask = mask.filter(ImageFilter.MaxFilter(3))
-    return F.to_tensor(img)*2-1., mask, img_name
+    img = img.resize((self.w, self.h))
+    mask = mask.resize((self.w, self.h), Image.NEAREST)
+    return F.to_tensor(img)*2-1., F.to_tensor(mask), img_name
 
   def create_iterator(self, batch_size):
     while True:

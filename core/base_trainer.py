@@ -20,8 +20,6 @@ from tensorboardX import SummaryWriter
 
 from core.dataset import Dataset
 from core.utils import set_seed, set_device
-
-from core import loss as module_loss
 from core import metric as module_metric
 
 

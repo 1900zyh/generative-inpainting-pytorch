@@ -1,4 +1,5 @@
 import os
+import time
 import io
 import sys
 import zipfile 
@@ -270,9 +271,9 @@ def random_bbox(config, batch_size):
         tuple: (top, left, height, width)
 
     """
-    img_height, img_width, _ = config['image_shape']
-    h, w = config['mask_shape']
-    margin_height, margin_width = config['margin']
+    img_height, img_width = config['data_loader']['h'], config['data_loader']['w']
+    h = w = config['data_loader']['mask_shape']
+    margin_height = margin_width = config['data_loader']['margin']
     maxt = img_height - margin_height - h
     maxl = img_width - margin_width - w
     bbox_list = []
@@ -305,23 +306,12 @@ def local_patch(x, bbox_list):
 
 
 def mask_image(x, bboxes, config):
-    height, width, _ = config['image_shape']
-    max_delta_h, max_delta_w = config['max_delta_shape']
+    height, width = config['data_loader']['h'], config['data_loader']['w']
+    max_delta_h = max_delta_w = config['data_loader']['max_delta_shape']
     mask = bbox2mask(bboxes, height, width, max_delta_h, max_delta_w)
-    if x.is_cuda:
-        mask = mask.cuda()
+    mask = set_device(mask)
 
-    if config['mask_type'] == 'hole':
-        result = x * (1. - mask)
-    elif config['mask_type'] == 'mosaic':
-        # TODO: Matching the mosaic patch size and the mask size
-        mosaic_unit_size = config['mosaic_unit_size']
-        downsampled_image = F.interpolate(x, scale_factor=1. / mosaic_unit_size, mode='nearest')
-        upsampled_image = F.interpolate(downsampled_image, size=(height, width), mode='nearest')
-        result = upsampled_image * mask + x * (1. - mask)
-    else:
-        raise NotImplementedError('Not implemented mask type.')
-
+    result = x * (1. - mask)
     return result, mask
 
 
@@ -339,23 +329,19 @@ def spatial_discounting_mask(config):
         tf.Tensor: spatial discounting mask
 
     """
-    gamma = config['spatial_discounting_gamma']
-    height, width = config['mask_shape']
+    gamma = config['losses']['spatial_discounting_gamma']
+    height = width = config['data_loader']['mask_shape']
     shape = [1, 1, height, width]
-    if config['discounted_mask']:
-        mask_values = np.ones((height, width))
-        for i in range(height):
-            for j in range(width):
-                mask_values[i, j] = max(
-                    gamma ** min(i, height - i),
-                    gamma ** min(j, width - j))
-        mask_values = np.expand_dims(mask_values, 0)
-        mask_values = np.expand_dims(mask_values, 0)
-    else:
-        mask_values = np.ones(shape)
+    mask_values = np.ones((height, width))
+    for i in range(height):
+        for j in range(width):
+            mask_values[i, j] = max(
+                gamma ** min(i, height - i),
+                gamma ** min(j, width - j))
+    mask_values = np.expand_dims(mask_values, 0)
+    mask_values = np.expand_dims(mask_values, 0)
     spatial_discounting_mask_tensor = torch.tensor(mask_values, dtype=torch.float32)
-    if config['cuda']:
-        spatial_discounting_mask_tensor = spatial_discounting_mask_tensor.cuda()
+    spatial_discounting_mask_tensor = set_device(spatial_discounting_mask_tensor)
     return spatial_discounting_mask_tensor
 
 
