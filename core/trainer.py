@@ -38,6 +38,9 @@ class Trainer(BaseTrainer):
         broadcast_buffers=True)#, find_unused_parameters=False)
       self.globalD = DDP(self.globalD, device_ids=[config['global_rank']], output_device=config['global_rank'], 
         broadcast_buffers=True)#, find_unused_parameters=False)
+    if debug:
+      self.config['trainer']['save_freq'] = 5
+      self.config['trainer']['valid_freq'] = 5
     
 
   def _train_epoch(self):
@@ -167,11 +170,11 @@ class Trainer(BaseTrainer):
       images, inpts, masks = set_device([images, inpts, masks])
       with torch.no_grad():
         output, _ = self.netG(inpts, masks)
-      grid_img = make_grid(torch.cat([(images+1)/2, (masks*images+1)/2,
-        (output+1)/2, (masks*images+(1-masks)*output+1)/2], dim=0), nrow=4)
+      grid_img = make_grid(torch.cat([(images+1)/2, ((1-masks)*images+1)/2,
+        (output+1)/2, ((1-masks)*images+masks*output+1)/2], dim=0), nrow=4)
       save_image(grid_img, os.path.join(path, '{}_stack.png'.format(names[0].split('.')[0])))
       orig_imgs = postprocess(images)
-      comp_imgs = postprocess(masks*images+(1-masks)*output)
+      comp_imgs = postprocess((1-masks)*images+masks*output)
       Image.fromarray(orig_imgs[0]).save(os.path.join(path, '{}_orig.png'.format(names[0].split('.')[0])))
       Image.fromarray(comp_imgs[0]).save(os.path.join(path, '{}_comp.png'.format(names[0].split('.')[0])))
       for key, val in self.metrics.items():

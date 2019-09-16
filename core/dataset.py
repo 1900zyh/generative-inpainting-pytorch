@@ -48,7 +48,7 @@ class Dataset(torch.utils.data.Dataset):
     m_index = random.randint(0, len(self.mask)-1) if self.split == 'train' else index
     mask_path = os.path.dirname(self.mask[m_index]) + '.zip'
     mask_name = os.path.basename(self.mask[m_index])
-    mask = ZipReader.imread(mask_path, mask_name).convert('RGB')
+    mask = ZipReader.imread(mask_path, mask_name).convert('L')
     # augment 
     if self.split == 'train': 
       img = transforms.RandomHorizontalFlip()(img)

@@ -115,10 +115,7 @@ class BaseTrainer():
       if self.config['global_rank'] == 0:
         print('Loading model from {}...'.format(gen_path))
       data = torch.load(gen_path, map_location = lambda storage, loc: set_device(storage)) 
-      netG_dict = self.netG.state_dict()
-      pretrained_dict = {k:v for k,v in data['netG'].items() if k in netG_dict}
-      netG_dict.update(pretrained_dict)
-      self.netG_dict.load_state_dict(netG_dict)
+      self.netG.load_state_dict(data['netG'])
       data = torch.load(dis_path, map_location = lambda storage, loc: set_device(storage)) 
       self.optimG.load_state_dict(data['optimG'])
       self.optimD.load_state_dict(data['optimD'])
