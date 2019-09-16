@@ -42,6 +42,7 @@ class Trainer(BaseTrainer):
 
   def _train_epoch(self):
     progbar = Progbar(len(self.train_dataset), width=20, stateful_metrics=['epoch', 'iter'])
+    mae = 0
     for ground_truth, _, names in self.train_loader:
       self.iteration += 1
       end = time.time()
@@ -79,7 +80,7 @@ class Trainer(BaseTrainer):
         # wgan g loss
         local_patch_real_pred, local_patch_fake_pred = self.dis_forward(self.localD, local_patch_gt, local_patch_x2_inpaint)
         global_real_pred, global_fake_pred = self.dis_forward(self.globalD, ground_truth, x2_inpaint)
-        losses['wgan_g'] = - torch.mean(local_patch_fake_pred) - torch.mean(global_fake_pred) * self.config['global_wgan_loss_alpha']
+        losses['wgan_g'] = - torch.mean(local_patch_fake_pred) - torch.mean(global_fake_pred) * self.config['losses']['global_wgan_loss_alpha']
 
       # Scalars from different devices are gathered into vectors
       for k in losses.keys():
@@ -102,11 +103,11 @@ class Trainer(BaseTrainer):
         self.optimG.step()
     
       # logs
-      new_mae = torch.mean(torch.abs(ground_truth - x2)) / torch.mean(masks)
+      new_mae = (torch.mean(torch.abs(ground_truth - x2)) / torch.mean(masks)).item()
       mae = new_mae if mae == 0 else (new_mae+mae)/2
       speed = ground_truth.size(0)/(time.time() - end)*self.config['world_size']
       logs = [("epoch", self.epoch),("iter", self.iteration),("lr", self.get_lr()),
-        ('mae', mae.item()), ('samples/s', speed)]
+        ('mae', mae), ('samples/s', speed)]
       if self.config['global_rank'] == 0:
         progbar.add(len(ground_truth)*self.config['world_size'], values=logs \
           if self.train_args['verbosity'] else [x for x in logs if not x[0].startswith('l_')])
