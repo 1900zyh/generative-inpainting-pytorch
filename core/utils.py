@@ -288,11 +288,11 @@ def random_bbox(config, batch_size):
 def bbox2mask(bboxes, height, width, max_delta_h, max_delta_w):
     batch_size = bboxes.size(0)
     mask = torch.zeros((batch_size, 1, height, width), dtype=torch.float32)
+    delta_h = np.random.randint(max_delta_h // 2 + 1)
+    delta_w = np.random.randint(max_delta_w // 2 + 1)
     for i in range(batch_size):
-        bbox = bboxes[i]
-        delta_h = np.random.randint(max_delta_h // 2 + 1)
-        delta_w = np.random.randint(max_delta_w // 2 + 1)
-        mask[i, :, bbox[0] + delta_h:bbox[0] + bbox[2] - delta_h, bbox[1] + delta_w:bbox[1] + bbox[3] - delta_w] = 1.
+      bbox = bboxes[i]
+      mask[i, :, bbox[0] + delta_h:bbox[0] + bbox[2] - delta_h, bbox[1] + delta_w:bbox[1] + bbox[3] - delta_w] = 1.
     return mask
 
 
@@ -310,7 +310,6 @@ def mask_image(x, bboxes, config):
     max_delta_h = max_delta_w = config['data_loader']['max_delta_shape']
     mask = bbox2mask(bboxes, height, width, max_delta_h, max_delta_w)
     mask = set_device(mask)
-
     result = x * (1. - mask)
     return result, mask
 

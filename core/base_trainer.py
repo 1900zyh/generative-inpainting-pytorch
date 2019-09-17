@@ -49,7 +49,7 @@ class BaseTrainer():
       batch_size= 1, shuffle=None, num_workers=config['data_loader']['num_workers'],
       pin_memory=True, sampler=self.valid_sampler, worker_init_fn=worker_init_fn)
 
-    # set tup matrics
+    # set up metrics
     self.metrics = {met: getattr(module_metric, met) for met in config['metrics']}
     self.dis_writer = None
     self.gen_writer = None
@@ -91,7 +91,7 @@ class BaseTrainer():
       if isinstance(self.netG, torch.nn.DataParallel) or isinstance(self.netG, DDP):
         netG, localD, globalD = self.netG.module, self.localD.module, self.globalD.module
       else:
-        netG, localD, globalD = self.netG.module, self.localD.module, self.globalD.module
+        netG, localD, globalD = self.netG, self.localD, self.globalD
       torch.save({'netG': netG.state_dict()}, gen_path)
       torch.save({'epoch': self.epoch, 'iteration': self.iteration,
                   'localD': localD.state_dict(), 
