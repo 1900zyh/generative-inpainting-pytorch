@@ -166,7 +166,7 @@ class Trainer(BaseTrainer):
     evaluation_scores = {key: 0 for key,val in self.metrics.items()}
     index = 0
     for images, masks, names in self.valid_loader:
-      inpts = images*masks
+      inpts = images*(1-masks)
       images, inpts, masks = set_device([images, inpts, masks])
       with torch.no_grad():
         output, _ = self.netG(inpts, masks)
