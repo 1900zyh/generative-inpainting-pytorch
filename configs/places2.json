@@ -32,7 +32,7 @@
         "ae_loss_alpha": 1.2
     },
     "metrics": [
-        "rmse",
+        "mae",
         "psnr",
         "ssim"
     ],

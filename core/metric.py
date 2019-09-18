@@ -5,29 +5,34 @@ from scipy import linalg
 import urllib.request
 from scipy.ndimage import gaussian_filter
 from numpy.lib.stride_tricks import as_strided as ast
-from skimage.measure import compare_ssim, compare_psnr, compare_nrmse
+from skimage.measure import compare_ssim, compare_psnr
 
 import torch
 
 
+
+def compare_mae(img_true, img_test):
+  img_true = img_true.astype(np.float32)
+  img_test = img_test.astype(np.float32)
+  return np.sum(np.abs(img_true - img_test)) / np.sum(img_true + img_test)
+
 def ssim(frames1, frames2):
-    error = 0
-    for i in range(len(frames1)):
-        error += compare_ssim(frames1[i], frames2[i], multichannel=True, win_size=51)
-    return error/len(frames1)
+  error = 0
+  for i in range(len(frames1)):
+    error += compare_ssim(frames1[i], frames2[i], multichannel=True, win_size=51)
+  return error/len(frames1)
 
 def psnr(frames1, frames2):
-    error = 0
-    for i in range(len(frames1)):
-        error += compare_psnr(frames1[i], frames2[i])
-    return error/len(frames1)
+  error = 0
+  for i in range(len(frames1)):
+    error += compare_psnr(frames1[i], frames2[i])
+  return error/len(frames1)
 
-def rmse(frames1, frames2):
-    error = 0
-    for i in range(len(frames1)):
-        error += compare_nrmse(frames1[i], frames2[i])
-    return error/len(frames1)
-
+def mae(frames1, frames2):
+  error = 0
+  for i in range(len(frames1)):
+    error += compare_mae(frames1[i], frames2[i])
+  return error/len(frames1)
 
 def get_fid_score(real_activations, fake_activations):
     """

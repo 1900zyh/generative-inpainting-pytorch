@@ -32,7 +32,7 @@ class BaseTrainer():
 
     # setup data set and data loader
     self.train_dataset = Dataset(config['data_loader'], debug=debug, split='train')
-    self.valid_dataset = Dataset(config['data_loader'], debug=debug, split='test')
+    self.valid_dataset = Dataset(config['data_loader'], debug=debug, split='valid')
     worker_init_fn = partial(set_seed, base=config['seed'])
     self.train_sampler = None
     self.valid_sampler = None

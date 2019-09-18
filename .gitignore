@@ -112,3 +112,4 @@ events*
 debug.*
 __pycache__
 __init__.py
+release_model
