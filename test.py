@@ -66,6 +66,8 @@ def main_worker(gpu, ngpus_per_node, config):
   os.makedirs(path, exist_ok=True)
   # iteration through datasets
   for idx, (images, masks, names) in enumerate(dataloader):
+    print('[{}] GPU{}: {}/{}: {}'.format(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+      gpu, idx, len(dataloader), names[0]))
     inpts = images*(1-masks)
     images, inpts, masks = set_device([images, inpts, masks])
     with torch.no_grad():

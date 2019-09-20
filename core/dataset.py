@@ -30,6 +30,10 @@ class Dataset(torch.utils.data.Dataset):
 
   def __len__(self):
     return len(self.data)
+  
+  def set_subset(self, start, end):
+    self.mask = self.mask[start:end]
+    self.data = self.data[start:end] 
 
   def __getitem__(self, index):
     try:
