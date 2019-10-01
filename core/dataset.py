@@ -14,9 +14,10 @@ from core.utils import ZipReader
 
 
 class Dataset(torch.utils.data.Dataset):
-  def __init__(self, data_args, debug=False, split='train'):
+  def __init__(self, data_args, debug=False, split='train', level=None):
     super(Dataset, self).__init__()
     self.split = split
+    self.level = level
     self.w, self.h = data_args['w'], data_args['h']
     self.data = [os.path.join(data_args['zip_root'], data_args['name'], i) 
       for i in np.genfromtxt(os.path.join(data_args['flist_root'], data_args['name'], split+'.flist'), dtype=np.str, encoding='utf-8')]
@@ -52,6 +53,8 @@ class Dataset(torch.utils.data.Dataset):
     m_index = random.randint(0, len(self.mask)-1) if self.split == 'train' else index
     mask_path = os.path.dirname(self.mask[m_index]) + '.zip'
     mask_name = os.path.basename(self.mask[m_index])
+    if self.level is not None:
+      mask_name = '{}.png'.format(str(index%2000 + self.level*2000).zfill(5))
     mask = ZipReader.imread(mask_path, mask_name).convert('L')
     # augment 
     if self.split == 'train': 
