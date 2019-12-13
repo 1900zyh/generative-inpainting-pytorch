@@ -1,25 +1,13 @@
 {
     "save_dir": "release_model/",
     "seed": 2020,
-    "netG": {
-        "input_dim": 3,
-        "ngf": 32
-    },
-    "netD": {
-        "input_dim": 3,
-        "ndf": 64
-    },
     "data_loader": {
         "name": "celebahq", 
         "zip_root": "../datazip",
         "flist_root": "../flist",
+        "mask": "square",
         "w": 512,
-        "h": 512,
-        "mask_shape": 128,
-        "max_delta_shape": 32,
-        "margin": 0,
-        "batch_size": 16,
-        "num_workers": 4
+        "h": 512
     },
     "losses": {
         "spatial_discounting_gamma": 0.9,
@@ -28,32 +16,23 @@
         "ae_loss_alpha": 1.2,
         "gan_loss_alpha": 0.001,
         "global_wgan_loss_alpha": 1,
-        "wgan_gp_lambda": 10,
-        "ae_loss_alpha": 1.2
-    },
-    "metrics": [
-        "mae",
-        "psnr",
-        "ssim"
-    ],
-    "optimizer": {
-        "type": "Adam",
-        "lr": 0.0001,
-        "beta1": 0.5,
-        "beta2": 0.9,
-        "weight_decay": 0,
-        "amsgrad": true
+        "wgan_gp_lambda": 10
     },
     "trainer": {
-        "iterations": 200000,
-        "save_freq": 5000,
-        "valid_freq": 10000,
+        "type": "Adam",
+        "lr": 1e-4,
+        "d2glr": 1, 
+        "beta1": 0.5,
+        "beta2": 0.9,
         "verbosity": 2,
-        "mask_only": true,
-        "n_critic": 5
-    },
-    "logger": {
+        "iterations": 33e4,
+        "save_freq": 1e4,
+        "valid_freq": 1e4,
+        "niter": 30e4,
+        "niter_steady": 1e4,
+        "batch_size": 16,
+        "num_workers": 4,
         "log_step": 100,
-        "tensorboardX": true
+        "n_critic": 5
     }
 }

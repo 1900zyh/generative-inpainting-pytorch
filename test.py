@@ -33,12 +33,14 @@ import glob
 from core.utils import set_device, postprocess, ZipReader, set_seed
 from core.utils import postprocess
 from core.dataset import Dataset
-from core.model import Generator
+from model.ca import Generator
  
 
 parser = argparse.ArgumentParser(description="CA")
 parser.add_argument("-c", "--config", type=str, required=True)
 parser.add_argument("-l", "--level", type=int, required=True)
+parser.add_argument("-s", "--size", type=int, default=None)
+parser.add_argument("-m", "--mask", type=str, default=None)
 parser.add_argument("-p", "--port", type=str, default="23451")
 args = parser.parse_args()
 
@@ -49,7 +51,7 @@ def main_worker(gpu, ngpus_per_node, config):
   set_seed(config['seed'])
 
   # Model and version
-  model = set_device(Generator(config['netG']))
+  model = set_device(Generator())
   latest_epoch = open(os.path.join(config['save_dir'], 'latest.ckpt'), 'r').read().splitlines()[-1]
   path = os.path.join(config['save_dir'], 'gen_{}.pth'.format(latest_epoch))
   data = torch.load(path, map_location = lambda storage, loc: set_device(storage)) 
@@ -85,7 +87,11 @@ def main_worker(gpu, ngpus_per_node, config):
 if __name__ == '__main__':
   ngpus_per_node = torch.cuda.device_count()
   config = json.load(open(args.config))
-  config['save_dir'] = os.path.join(config['save_dir'], config['data_loader']['name'])
+  if args.mask is not None:
+    config['data_loader']['mask'] = args.mask
+  if args.size is not None:
+    config['data_loader']['w'] = config['data_loader']['h'] = args.size
+  config['save_dir'] = os.path.join(config['save_dir'], '{}{}'.format(config['data_loader']['name'], config['data_loader']['w']))
 
   print('using {} GPUs for testing ... '.format(ngpus_per_node))
   # setup distributed parallel training environments

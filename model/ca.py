@@ -12,10 +12,10 @@ from core.utils import extract_image_patches, flow_to_image, \
 
 
 class Generator(nn.Module):
-    def __init__(self, config):
+    def __init__(self,):
         super(Generator, self).__init__()
-        self.input_dim = config['input_dim']
-        self.cnum = config['ngf']
+        self.input_dim = 3
+        self.cnum = 32
 
         self.coarse_generator = CoarseGenerator(self.input_dim, self.cnum)
         self.fine_generator = FineGenerator(self.input_dim, self.cnum)
@@ -290,14 +290,6 @@ class ContextualAttention(nn.Module):
             yi = F.softmax(yi*scale, dim=1)
             yi = yi * mm  # [1, L, H, W]
 
-            # offset = torch.argmax(yi, dim=1, keepdim=True)  # 1*1*H*W
-            # if int_bs != int_fs:
-            #     # Normalize the offset value to match foreground dimension
-            #     times = float(int_fs[2] * int_fs[3]) / float(int_bs[2] * int_bs[3])
-            #     offset = ((offset + 1).float() * times - 1).to(torch.int64)
-            # offset = torch.cat([offset//int_fs[3], offset%int_fs[3]], dim=1)  # 1*2*H*W
-            # offsets.append(offset)
-
             # deconv for patch pasting
             wi_center = raw_wi[0]
             # yi = F.pad(yi, [0, 1, 0, 1])    # here may need conv_transpose same padding
@@ -306,77 +298,13 @@ class ContextualAttention(nn.Module):
 
         y = torch.cat(y, dim=0)  # back to the mini-batch
         y.contiguous().view(raw_int_fs)
-
-        # offsets = torch.cat(offsets, dim=0)
-        # offsets = offsets.view(int_fs[0], 2, *int_fs[2:])
-
-        # # case1: visualize optical flow: minus current position
-        # h_add = torch.arange(int_fs[2]).view([1, 1, int_fs[2], 1]).expand(int_fs[0], -1, -1, int_fs[3])
-        # w_add = torch.arange(int_fs[3]).view([1, 1, 1, int_fs[3]]).expand(int_fs[0], -1, int_fs[2], -1)
-        # ref_coordinate = torch.cat([h_add, w_add], dim=1)
-
-        # offsets = offsets - ref_coordinate
-        # # flow = pt_flow_to_image(offsets)
-
-        # flow = torch.from_numpy(flow_to_image(offsets.permute(0, 2, 3, 1).cpu().data.numpy())) / 255.
-        # flow = flow.permute(0, 3, 1, 2)
-        # # case2: visualize which pixels are attended
-        # # flow = torch.from_numpy(highlight_flow((offsets * mask.long()).cpu().data.numpy()))
-
-        # if self.rate != 1:
-        #     flow = F.interpolate(flow, scale_factor=self.rate*4, mode='nearest')
-
-        return y#, flow
-
-
-def test_contextual_attention(args):
-    import cv2
-    import os
-    # run on cpu
-    os.environ['CUDA_VISIBLE_DEVICES'] = '2'
-
-    def float_to_uint8(img):
-        img = img * 255
-        return img.astype('uint8')
-
-    rate = 2
-    stride = 1
-    grid = rate*stride
-
-    b = default_loader(args.imageA)
-    w, h = b.size
-    b = b.resize((w//grid*grid//2, h//grid*grid//2), Image.ANTIALIAS)
-    # b = b.resize((w//grid*grid, h//grid*grid), Image.ANTIALIAS)
-    print('Size of imageA: {}'.format(b.size))
-
-    f = default_loader(args.imageB)
-    w, h = f.size
-    f = f.resize((w//grid*grid, h//grid*grid), Image.ANTIALIAS)
-    print('Size of imageB: {}'.format(f.size))
-
-    f, b = transforms.ToTensor()(f), transforms.ToTensor()(b)
-    f, b = f.unsqueeze(0), b.unsqueeze(0)
-    if torch.cuda.is_available():
-        f, b = f.cuda(), b.cuda()
-
-    contextual_attention = ContextualAttention(ksize=3, stride=stride, rate=rate, fuse=True)
-
-    if torch.cuda.is_available():
-        contextual_attention = contextual_attention.cuda()
-
-    yt, flow_t = contextual_attention(f, b)
-    vutils.save_image(yt, 'vutils' + args.imageOut, normalize=True)
-    vutils.save_image(flow_t, 'flow' + args.imageOut, normalize=True)
-    # y = tensor_img_to_npimg(yt.cpu()[0])
-    # flow = tensor_img_to_npimg(flow_t.cpu()[0])
-    # cv2.imwrite('flow' + args.imageOut, flow_t)
-
+        return y
 
 class LocalDis(nn.Module):
-    def __init__(self, config):
+    def __init__(self,):
         super(LocalDis, self).__init__()
-        self.input_dim = config['input_dim']
-        self.cnum = config['ndf']
+        self.input_dim = 3
+        self.cnum = 64
 
         self.dis_conv_module = DisConvModule(self.input_dim, self.cnum)
         self.linear = nn.Linear(self.cnum*4*8*8, 1)
@@ -390,11 +318,10 @@ class LocalDis(nn.Module):
 
 
 class GlobalDis(nn.Module):
-    def __init__(self, config):
+    def __init__(self,):
         super(GlobalDis, self).__init__()
-        self.input_dim = config['input_dim']
-        self.cnum = config['ndf']
-
+        self.input_dim = 3
+        self.cnum = 64
         self.dis_conv_module = DisConvModule(self.input_dim, self.cnum)
         self.linear = nn.Linear(self.cnum*4*32*32, 1)
 
@@ -521,13 +448,3 @@ class Conv2dBlock(nn.Module):
             x = self.activation(x)
         return x
 
-
-
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--imageA', default='', type=str, help='Image A as background patches to reconstruct image B.')
-    parser.add_argument('--imageB', default='', type=str, help='Image B is reconstructed with image A.')
-    parser.add_argument('--imageOut', default='result.png', type=str, help='Image B is reconstructed with image A.')
-    args = parser.parse_args()
-    test_contextual_attention(args)

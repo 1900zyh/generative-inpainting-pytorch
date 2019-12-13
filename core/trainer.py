@@ -1,35 +1,68 @@
 import os
 import time
 import datetime
+import glob
 from PIL import Image
+from functools import partial
 
 import torch
 import torch.nn as nn
 from torch import autograd
 import torch.distributed as dist
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from tensorboardX import SummaryWriter
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-from core.base_trainer import BaseTrainer
-from core.model import Generator, LocalDis, GlobalDis
-from core.utils import local_patch, spatial_discounting_mask
-from core.utils import random_bbox, mask_image, postprocess
 from torchvision.utils import make_grid, save_image
 
-from core.utils import set_device, Progbar
+from model.ca import Generator, LocalDis, GlobalDis
+from core.utils import local_patch, spatial_discounting_mask
+from core.utils import random_bbox, mask_image, postprocess
+from core.utils import set_seed, set_device, Progbar
+from core.dataset import Dataset
 
 
-
-class Trainer(BaseTrainer):
+class Trainer():
   def __init__(self, config, debug=False):
     super().__init__(config, debug=debug)
+    self.config = config
+    self.epoch = 0
+    self.iteration = 0
+    if debug:
+      self.config['trainer']['save_freq'] = 5
+      self.config['trainer']['valid_freq'] = 5
+
+    # setup data set and data loader
+    self.train_dataset = Dataset(config['data_loader'], debug=debug, split='train')
+    worker_init_fn = partial(set_seed, base=config['seed'])
+    self.train_sampler = None
+    if config['distributed']:
+      self.train_sampler = DistributedSampler(self.train_dataset, 
+        num_replicas=config['world_size'], rank=config['global_rank'])
+    self.train_loader = DataLoader(self.train_dataset, 
+      batch_size= config['data_loader']['batch_size'] // config['world_size'],
+      shuffle=(self.train_sampler is None), num_workers=config['data_loader']['num_workers'],
+      pin_memory=True, sampler=self.train_sampler, worker_init_fn=worker_init_fn)
+
+    # set up metrics
+    self.dis_writer = None
+    self.gen_writer = None
+    self.summary = {}
+    if self.config['global_rank'] == 0 or (not config['distributed']):
+      self.dis_writer = SummaryWriter(os.path.join(config['save_dir'], 'dis'))
+      self.gen_writer = SummaryWriter(os.path.join(config['save_dir'], 'gen'))
+    self.train_args = self.config['trainer']
+    
     # setup models 
-    self.netG = set_device(Generator(self.config['netG']))
-    self.localD = set_device(LocalDis(self.config['netD']))
-    self.globalD = set_device(GlobalDis(self.config['netD']))
-    self.optimG = torch.optim.Adam(self.netG.parameters(), lr=self.config['optimizer']['lr'],
-      betas=(self.config['optimizer']['beta1'], self.config['optimizer']['beta2']))
-    self.optimD = torch.optim.Adam(list(self.localD.parameters()) + list(self.globalD.parameters()), lr=config['optimizer']['lr'],
-      betas=(self.config['optimizer']['beta1'], self.config['optimizer']['beta2']))
+    self.netG = set_device(Generator())
+    self.localD = set_device(LocalDis())
+    self.globalD = set_device(GlobalDis())
+    self.optimG = torch.optim.Adam(self.netG.parameters(), lr=self.config['trainer']['lr'],
+      betas=(self.config['trainer']['beta1'], self.config['trainer']['beta2']))
+    self.optimD = torch.optim.Adam(list(self.localD.parameters()) + list(self.globalD.parameters()), lr=config['trainer']['lr'],
+      betas=(self.config['trainer']['beta1'], self.config['trainer']['beta2']))
     self._load()
     if config['distributed']:
       self.netG = DDP(self.netG, device_ids=[config['global_rank']], output_device=config['global_rank'], 
@@ -38,15 +71,95 @@ class Trainer(BaseTrainer):
         broadcast_buffers=True)#, find_unused_parameters=False)
       self.globalD = DDP(self.globalD, device_ids=[config['global_rank']], output_device=config['global_rank'], 
         broadcast_buffers=True)#, find_unused_parameters=False)
-    if debug:
-      self.config['trainer']['save_freq'] = 5
-      self.config['trainer']['valid_freq'] = 5
     
+
+  # get current learning rate
+  def get_lr(self, type='G'):
+    if type == 'G':
+      return self.optimG.param_groups[0]['lr']
+    return self.optimD.param_groups[0]['lr']
+  
+ # learning rate scheduler, step
+  def adjust_learning_rate(self):
+    decay = 0.1**(min(self.iteration, self.config['trainer']['niter_steady']) // self.config['trainer']['niter']) 
+    new_lr = self.config['trainer']['lr'] * decay
+    if new_lr != self.get_lr():
+      for param_group in self.optimG.param_groups:
+        param_group['lr'] = new_lr
+      for param_group in self.optimD.param_groups:
+       param_group['lr'] = new_lr
+
+  def add_summary(self, writer, name, val):
+    if name not in self.summary:
+      self.summary[name] = 0
+    self.summary[name] += val
+    if writer is not None and self.iteration % 100 == 0:
+      writer.add_scalar(name, self.summary[name]/100, self.iteration)
+
+  def train(self):
+    while True:
+      self.epoch += 1
+      if self.config['distributed']:
+        self.train_sampler.set_epoch(self.epoch)
+      self._train_epoch()
+      if self.iteration > self.config['trainer']['iterations']:
+        break
+    print('\nEnd training....')
+
+  # save parameters every eval_epoch
+  def _save(self, it):
+    if self.config['global_rank'] == 0:
+      gen_path = os.path.join(self.config['save_dir'], 'gen_{}.pth'.format(str(it).zfill(5)))
+      dis_path = os.path.join(self.config['save_dir'], 'dis_{}.pth'.format(str(it).zfill(5)))
+      opt_path = os.path.join(self.config['save_dir'], 'opt_{}.pth'.format(str(it).zfill(5)))
+      print('\nsaving model to {} ...'.format(gen_path))
+      if isinstance(self.netG, torch.nn.DataParallel) or isinstance(self.netG, DDP):
+        netG, localD, globalD = self.netG.module, self.localD.module, self.globalD.module
+      else:
+        netG, localD, globalD = self.netG, self.localD, self.globalD
+      torch.save({'netG': netG.state_dict()}, gen_path)
+      torch.save({'localD': localD.state_dict(), 
+                  'globalD': globalD.state_dict()}, dis_path)
+      torch.save({'epoch': self.epoch, 'iteration': self.iteration,
+                  'optimG': self.optimG.state_dict(),
+                  'optimD': self.optimD.state_dict()}, opt_path)
+      os.system('echo {} > {}'.format(str(it).zfill(5), os.path.join(self.config['save_dir'], 'latest.ckpt')))
+
+
+  # load model parameters
+  def _load(self):
+    model_path = self.config['save_dir']
+    if os.path.isfile(os.path.join(model_path, 'latest.ckpt')):
+      latest_epoch = open(os.path.join(model_path, 'latest.ckpt'), 'r').read().splitlines()[-1]
+    else:
+      ckpts = [os.path.basename(i).split('.pth')[0] for i in glob.glob(os.path.join(model_path, '*.pth'))]
+      ckpts.sort()
+      latest_epoch = ckpts[-1] if len(ckpts)>0 else None
+    if latest_epoch is not None:
+      gen_path = os.path.join(model_path, 'gen_{}.pth'.format(str(latest_epoch).zfill(5)))
+      dis_path = os.path.join(model_path, 'dis_{}.pth'.format(str(latest_epoch).zfill(5)))
+      opt_path = os.path.join(self.config['save_dir'], 'opt_{}.pth'.format(str(it).zfill(5)))
+      if self.config['global_rank'] == 0:
+        print('Loading model from {}...'.format(gen_path))
+      data = torch.load(gen_path, map_location = lambda storage, loc: set_device(storage)) 
+      self.netG.load_state_dict(data['netG'])
+      data = torch.load(dis_path, map_location = lambda storage, loc: set_device(storage)) 
+      self.localD.load_state_dict(data['localD'])
+      self.globalD.load_state_dict(data['globalD'])
+      data = torch.load(opt_path, map_location = lambda storage, loc: set_device(storage)) 
+      self.optimG.load_state_dict(data['optimG'])
+      self.optimD.load_state_dict(data['optimD'])
+      self.epoch = data['epoch']
+      self.iteration = data['iteration']
+    else:
+      if self.config['global_rank'] == 0:
+        print('Warnning: There is no trained model found. An initialized model will be used.')
+
 
   def _train_epoch(self):
     progbar = Progbar(len(self.train_dataset), width=20, stateful_metrics=['epoch', 'iter'])
     mae = 0
-    for ground_truth, _, names in self.train_loader:
+    for ground_truth, _, _ in self.train_loader:
       self.iteration += 1
       end = time.time()
       ground_truth = set_device(ground_truth)
@@ -119,7 +232,7 @@ class Trainer(BaseTrainer):
       if self.iteration % self.train_args['save_freq'] == 0:
         self._save(self.iteration//self.train_args['save_freq'])
       if self.iteration % self.train_args['valid_freq'] == 0:
-        self._eval_epoch(self.iteration//self.train_args['save_freq'])
+        self._test_epoch(self.iteration//self.train_args['save_freq'])
         if self.config['global_rank'] == 0:
           print('[**] Training till {} in Rank {}\n'.format(
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), self.config['global_rank']))
@@ -154,38 +267,17 @@ class Trainer(BaseTrainer):
       grad_outputs=grad_outputs, create_graph=True, retain_graph=True, only_inputs=True)[0]
     gradients = gradients.view(gradients.size(0), -1)
     gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
-
     return gradient_penalty
 
-  def _eval_epoch(self, it):
-    self.valid_sampler.set_epoch(it)
-    path = os.path.join(self.config['save_dir'], 'samples_{}'.format(str(it).zfill(5)))
-    os.makedirs(path, exist_ok=True)
+  def _test_epoch(self, it):
     if self.config['global_rank'] == 0:
-      print('start evaluating ...')
-    evaluation_scores = {key: 0 for key,val in self.metrics.items()}
-    index = 0
-    for images, masks, names in self.valid_loader:
-      inpts = images*(1-masks)
-      images, inpts, masks = set_device([images, inpts, masks])
-      with torch.no_grad():
-        output, _ = self.netG(inpts, masks)
-      grid_img = make_grid(torch.cat([(images+1)/2, ((1-masks)*images+1)/2,
-        (output+1)/2, ((1-masks)*images+masks*output+1)/2], dim=0), nrow=4)
-      save_image(grid_img, os.path.join(path, '{}_stack.png'.format(names[0].split('.')[0])))
-      orig_imgs = postprocess(images)
-      comp_imgs = postprocess((1-masks)*images+masks*output)
-      Image.fromarray(orig_imgs[0]).save(os.path.join(path, '{}_orig.png'.format(names[0].split('.')[0])))
-      Image.fromarray(comp_imgs[0]).save(os.path.join(path, '{}_comp.png'.format(names[0].split('.')[0])))
-      for key, val in self.metrics.items():
-        evaluation_scores[key] += val(orig_imgs, comp_imgs)
-      index += 1
-    for key, val in evaluation_scores.items():
-      tensor = set_device(torch.FloatTensor([val/index]))
-      dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
-      evaluation_scores[key] = tensor.cpu().item()
-    evaluation_message = ' '.join(['{}: {:5f},'.format(key, val/self.config['world_size']) \
-                        for key,val in evaluation_scores.items()])
-    if self.config['global_rank'] == 0:
-      print('[**] Evaluation: {}'.format(evaluation_message))
-
+      print('[**] Testing in backend ...')
+      model_path = self.config['save_dir']
+      result_path = '{}/results_{}_level_03'.format(model_path, str(it).zfill(5))
+      log_path = os.path.join(model_path, 'valid.log')
+      try: 
+        os.popen('python test.py -c {} -n {} -l 3 > valid.log;'
+          'CUDA_VISIBLE_DEVICES=1 python eval.py -r {} >> {};'
+          'rm -rf {}'.format(self.config['config'], self.config['model_name'], result_path, log_path, result_path))
+      except (BrokenPipeError, IOError):
+        pass

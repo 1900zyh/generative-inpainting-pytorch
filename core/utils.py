@@ -272,8 +272,8 @@ def random_bbox(config, batch_size):
 
     """
     img_height, img_width = config['data_loader']['h'], config['data_loader']['w']
-    h = w = config['data_loader']['mask_shape']
-    margin_height = margin_width = config['data_loader']['margin']
+    h = w = config['data_loader']['w'] // 2
+    margin_height = margin_width = 0
     maxt = img_height - margin_height - h
     maxl = img_width - margin_width - w
     bbox_list = []
@@ -307,7 +307,7 @@ def local_patch(x, bbox_list):
 
 def mask_image(x, bboxes, config):
     height, width = config['data_loader']['h'], config['data_loader']['w']
-    max_delta_h = max_delta_w = config['data_loader']['max_delta_shape']
+    max_delta_h = max_delta_w = 32
     mask = bbox2mask(bboxes, height, width, max_delta_h, max_delta_w)
     mask = set_device(mask)
     result = x * (1. - mask)
@@ -329,7 +329,7 @@ def spatial_discounting_mask(config):
 
     """
     gamma = config['losses']['spatial_discounting_gamma']
-    height = width = config['data_loader']['mask_shape']
+    height = width = config['data_loader']['w'] // 2
     shape = [1, 1, height, width]
     mask_values = np.ones((height, width))
     for i in range(height):
