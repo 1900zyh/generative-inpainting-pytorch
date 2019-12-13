@@ -6,6 +6,7 @@
         "zip_root": "../datazip",
         "flist_root": "../flist",
         "mask": "square",
+        "extend": 1,
         "w": 512,
         "h": 512
     },

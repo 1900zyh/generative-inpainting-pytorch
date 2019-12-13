@@ -26,7 +26,6 @@ from core.dataset import Dataset
 
 class Trainer():
   def __init__(self, config, debug=False):
-    super().__init__(config, debug=debug)
     self.config = config
     self.epoch = 0
     self.iteration = 0
@@ -42,8 +41,8 @@ class Trainer():
       self.train_sampler = DistributedSampler(self.train_dataset, 
         num_replicas=config['world_size'], rank=config['global_rank'])
     self.train_loader = DataLoader(self.train_dataset, 
-      batch_size= config['data_loader']['batch_size'] // config['world_size'],
-      shuffle=(self.train_sampler is None), num_workers=config['data_loader']['num_workers'],
+      batch_size= config['trainer']['batch_size'] // config['world_size'],
+      shuffle=(self.train_sampler is None), num_workers=config['trainer']['num_workers'],
       pin_memory=True, sampler=self.train_sampler, worker_init_fn=worker_init_fn)
 
     # set up metrics
@@ -57,8 +56,8 @@ class Trainer():
     
     # setup models 
     self.netG = set_device(Generator())
-    self.localD = set_device(LocalDis())
-    self.globalD = set_device(GlobalDis())
+    self.localD = set_device(LocalDis(config))
+    self.globalD = set_device(GlobalDis(config))
     self.optimG = torch.optim.Adam(self.netG.parameters(), lr=self.config['trainer']['lr'],
       betas=(self.config['trainer']['beta1'], self.config['trainer']['beta2']))
     self.optimD = torch.optim.Adam(list(self.localD.parameters()) + list(self.globalD.parameters()), lr=config['trainer']['lr'],

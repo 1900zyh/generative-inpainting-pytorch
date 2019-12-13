@@ -301,13 +301,14 @@ class ContextualAttention(nn.Module):
         return y
 
 class LocalDis(nn.Module):
-    def __init__(self,):
+    def __init__(self, config):
         super(LocalDis, self).__init__()
         self.input_dim = 3
         self.cnum = 64
+        self.size = (config['data_loader']['w']//2) // 16
 
         self.dis_conv_module = DisConvModule(self.input_dim, self.cnum)
-        self.linear = nn.Linear(self.cnum*4*8*8, 1)
+        self.linear = nn.Linear(self.cnum*4*(self.size**2), 1)
 
     def forward(self, x):
         x = self.dis_conv_module(x)
@@ -318,12 +319,13 @@ class LocalDis(nn.Module):
 
 
 class GlobalDis(nn.Module):
-    def __init__(self,):
+    def __init__(self, config):
         super(GlobalDis, self).__init__()
         self.input_dim = 3
         self.cnum = 64
+        self.size = config['data_loader']['w'] // 16
         self.dis_conv_module = DisConvModule(self.input_dim, self.cnum)
-        self.linear = nn.Linear(self.cnum*4*32*32, 1)
+        self.linear = nn.Linear(self.cnum*4*(self.size**2), 1)
 
     def forward(self, x):
         x = self.dis_conv_module(x)
