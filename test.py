@@ -62,7 +62,7 @@ def main_worker(gpu, ngpus_per_node, config):
   dataset = Dataset(config['data_loader'], debug=False, split='test', level=args.level)
   step = math.ceil(len(dataset) / ngpus_per_node)
   dataset.set_subset(gpu*step, min(gpu*step+step, len(dataset)))
-  dataloader = DataLoader(dataset, batch_size= BATCH_SIZE, shuffle=False, num_workers=config['data_loader']['num_workers'], pin_memory=True)
+  dataloader = DataLoader(dataset, batch_size= BATCH_SIZE, shuffle=False, num_workers=config['trainer']['num_workers'], pin_memory=True)
 
   
   path = os.path.join(config['save_dir'], 'results_{}_level_{}'.format(str(latest_epoch).zfill(5), str(args.level).zfill(2)))

@@ -50,6 +50,7 @@ if __name__ == "__main__":
   
   # loading configs 
   config = json.load(open(args.config))
+  config['config'] = args.config
   if args.mask is not None:
     config['data_loader']['mask'] = args.mask
   if args.size is not None:

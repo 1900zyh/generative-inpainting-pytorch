@@ -137,7 +137,7 @@ class Trainer():
     if latest_epoch is not None:
       gen_path = os.path.join(model_path, 'gen_{}.pth'.format(str(latest_epoch).zfill(5)))
       dis_path = os.path.join(model_path, 'dis_{}.pth'.format(str(latest_epoch).zfill(5)))
-      opt_path = os.path.join(self.config['save_dir'], 'opt_{}.pth'.format(str(it).zfill(5)))
+      opt_path = os.path.join(self.config['save_dir'], 'opt_{}.pth'.format(str(latest_epoch).zfill(5)))
       if self.config['global_rank'] == 0:
         print('Loading model from {}...'.format(gen_path))
       data = torch.load(gen_path, map_location = lambda storage, loc: set_device(storage)) 
@@ -229,9 +229,9 @@ class Trainer():
 
       # saving and evaluating
       if self.iteration % self.train_args['save_freq'] == 0:
-        self._save(self.iteration//self.train_args['save_freq'])
+        self._save(int(self.iteration//self.train_args['save_freq']))
       if self.iteration % self.train_args['valid_freq'] == 0:
-        self._test_epoch(self.iteration//self.train_args['save_freq'])
+        self._test_epoch(int(self.iteration//self.train_args['save_freq']))
         if self.config['global_rank'] == 0:
           print('[**] Training till {} in Rank {}\n'.format(
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), self.config['global_rank']))
@@ -275,8 +275,8 @@ class Trainer():
       result_path = '{}/results_{}_level_03'.format(model_path, str(it).zfill(5))
       log_path = os.path.join(model_path, 'valid.log')
       try: 
-        os.popen('python test.py -c {} -n {} -l 3 > valid.log;'
+        os.popen('python test.py -c {} -l 3 > valid.log;'
           'CUDA_VISIBLE_DEVICES=1 python eval.py -r {} >> {};'
-          'rm -rf {}'.format(self.config['config'], self.config['model_name'], result_path, log_path, result_path))
+          'rm -rf {}'.format(self.config['config'], result_path, log_path, result_path))
       except (BrokenPipeError, IOError):
         pass
