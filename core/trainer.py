@@ -275,8 +275,8 @@ class Trainer():
       result_path = '{}/results_{}_level_03'.format(model_path, str(it).zfill(5))
       log_path = os.path.join(model_path, 'valid.log')
       try: 
-        os.popen('python test.py -c {} -l 3 > valid.log;'
+        os.popen('python test.py -c {} -m {} -s {} -l 3 > valid.log;'
           'CUDA_VISIBLE_DEVICES=1 python eval.py -r {} >> {};'
-          'rm -rf {}'.format(self.config['config'], result_path, log_path, result_path))
+          'rm -rf {}'.format(self.config['config'], self.config['data_loader']['mask'], self.config['data_loader']['w'], result_path, log_path, result_path))
       except (BrokenPipeError, IOError):
         pass
