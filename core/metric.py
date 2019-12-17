@@ -5,7 +5,8 @@ from scipy import linalg
 import urllib.request
 from scipy.ndimage import gaussian_filter
 from numpy.lib.stride_tricks import as_strided as ast
-from skimage.measure import compare_ssim, compare_psnr
+from skimage.metrics import structural_similarity as compare_ssim
+from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 
 import torch
 from torch.autograd import Variable
