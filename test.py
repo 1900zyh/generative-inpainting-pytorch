@@ -39,8 +39,8 @@ from model.ca import Generator
 parser = argparse.ArgumentParser(description="CA")
 parser.add_argument("-c", "--config", type=str, required=True)
 parser.add_argument("-l", "--level", type=int, required=True)
-parser.add_argument("-s", "--size", type=int, default=None)
-parser.add_argument("-m", "--mask", type=str, default="square")
+parser.add_argument("-s", "--size", type=int, default=512)
+parser.add_argument("-m", "--mask", type=str, default="pconv")
 parser.add_argument("-p", "--port", type=str, default="23451")
 args = parser.parse_args()
 
