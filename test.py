@@ -34,7 +34,7 @@ from core.utils import set_device, postprocess, ZipReader, set_seed
 from core.utils import postprocess
 from core.dataset import Dataset
 from model.ca import Generator
- 
+from tqdm import tqdm 
 
 parser = argparse.ArgumentParser(description="CA")
 parser.add_argument("-c", "--config", type=str, required=True)
@@ -68,9 +68,9 @@ def main_worker(gpu, ngpus_per_node, config):
   path = os.path.join(config['save_dir'], 'results_{}_level_{}'.format(str(latest_epoch).zfill(5), str(args.level).zfill(2)))
   os.makedirs(path, exist_ok=True)
   # iteration through datasets
-  for idx, (images, masks, names) in enumerate(dataloader):
-    print('[{}] GPU{}: {}/{}: {}'.format(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-      gpu, idx, len(dataloader), names[0]))
+  for images, masks, names in tqdm(dataloader):
+    # print('[{}] GPU{}: {}/{}: {}'.format(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    #   gpu, idx, len(dataloader), names[0]))
     inpts = images*(1-masks)
     images, inpts, masks = set_device([images, inpts, masks])
     with torch.no_grad():
