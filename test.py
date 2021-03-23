@@ -65,21 +65,20 @@ def main_worker(gpu, ngpus_per_node, config):
   dataloader = DataLoader(dataset, batch_size= BATCH_SIZE, shuffle=False, num_workers=config['trainer']['num_workers'], pin_memory=True)
 
   
-  path = os.path.join(config['save_dir'], 'results_{}_level_{}'.format(str(latest_epoch).zfill(5), str(args.level).zfill(2)))
-  os.makedirs(path, exist_ok=True)
+  path = os.path.join('results', os.path.basename(args.config).split('.')[0])
+  os.makedirs(os.path.join(path, f'comp_level0{args.level}'), exist_ok=True)
+  os.makedirs(os.path.join(path, f'mask_level0{args.level}'), exist_ok=True)
   # iteration through datasets
-  for images, masks, names in tqdm(dataloader):
-    # print('[{}] GPU{}: {}/{}: {}'.format(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    #   gpu, idx, len(dataloader), names[0]))
+  for images, masks, names in tqdm(dataloader, desc=f'ca-id-{gpu}-level {args.level}'):
     inpts = images*(1-masks)
     images, inpts, masks = set_device([images, inpts, masks])
     with torch.no_grad():
       output, _ = model(inpts, masks)
     orig_imgs = postprocess(images)
     comp_imgs = postprocess((1-masks)*images+masks*output)
+    mask_imgs = postprocess(inpts)
     for i in range(len(orig_imgs)):
-      Image.fromarray(orig_imgs[i]).save(os.path.join(path, '{}_orig.png'.format(names[i].split('.')[0])))
-      Image.fromarray(comp_imgs[i]).save(os.path.join(path, '{}_comp.png'.format(names[i].split('.')[0])))
+      Image.fromarray(comp_imgs[i]).save(os.path.join(path, f'comp_level0{args.level}', names[i].split('.')[0]+'.png'))
   print('Finish in {}'.format(path))
 
 

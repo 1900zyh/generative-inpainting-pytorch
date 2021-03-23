@@ -25,7 +25,7 @@ def compare_mae(img_true, img_test):
 def ssim(frames1, frames2):
   error = 0
   for i in range(len(frames1)):
-    error += compare_ssim(frames1[i], frames2[i], multichannel=True, win_size=51)
+    error += compare_ssim(frames1[i], frames2[i], multichannel=True)
   return error/len(frames1)
 
 def psnr(frames1, frames2):

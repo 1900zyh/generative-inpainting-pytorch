@@ -21,21 +21,14 @@ class Dataset(torch.utils.data.Dataset):
     self.split = split
     self.level = level
     self.w, self.h = data_args['w'], data_args['h']
-    self.data = [os.path.join(data_args['zip_root'], data_args['name'], i) 
-      for i in np.genfromtxt(os.path.join(data_args['flist_root'], data_args['name'], split+'.flist'), dtype=np.str, encoding='utf-8')]
+    # self.data = [os.path.join(data_args['zip_root'], data_args['name'], i) 
+    #   for i in np.genfromtxt(os.path.join(data_args['flist_root'], data_args['name'], split+'.flist'), dtype=np.str, encoding='utf-8')]
+    self.data = glob('/data05/t-yazen/data/places2/centercrop_512/*.png')
     self.data.sort()
 
-    self.mask_type = data_args.get('mask', 'pconv')
-    if self.mask_type == 'pconv':
-      self.mask = [os.path.join(data_args['zip_root'], 'mask/{}.png'.format(str(i).zfill(5))) for i in range(self.level*2000, (self.level+1)*2000)]
-    else:
-      self.mask = [0]*len(self.data)
-    
-    if split == 'train':
-      self.data = self.data*data_args['extend']
-      shuffle(self.data)
-    if debug:
-      self.data = self.data[:100]
+    self.mask = [os.path.join(data_args['zip_root'], 'mask/{}.png'.format(str(i).zfill(5))) for i in range(self.level*2000, (self.level+1)*2000)]
+    self.mask = self.mask*(len(self.data)//len(self.mask)) + self.mask[:len(self.data)%len(self.mask)]
+    print(f'data:{len(self.data)}, mask:{len(self.mask)}')
 
   def __len__(self):
     return len(self.data)
@@ -54,31 +47,13 @@ class Dataset(torch.utils.data.Dataset):
 
   def load_item(self, index):
     # load image
-    img_path = os.path.dirname(self.data[index]) + '.zip'
+    img = Image.open(self.data[index]).convert('RGB')
     img_name = os.path.basename(self.data[index])
-    img = ZipReader.imread(img_path, img_name).convert('RGB')
     # load mask 
-    if self.mask_type == 'pconv':
-      m_index = random.randint(0, len(self.mask)-1) if self.split == 'train' else index
-      m_index %= 2000 
-      mask_path = os.path.dirname(self.mask[m_index]) + '.zip'
-      mask_name = os.path.basename(self.mask[m_index])
-      mask = ZipReader.imread(mask_path, mask_name).convert('L')
-    else:
-      m = np.zeros((self.h, self.w)).astype(np.uint8)
-      if self.split == 'train':
-        t, l = random.randint(0, self.h//2), random.randint(0, self.w//2)
-        m[t:t+self.h//2, l:l+self.w//2] = 255
-      else:
-        m[self.h//4:self.h*3//4, self.w//4:self.w*3//4] = 255
-      mask = Image.fromarray(m).convert('L')
-    # augment 
-    if self.split == 'train': 
-      img = transforms.RandomHorizontalFlip()(img)
-      img = transforms.ColorJitter(0.05, 0.05, 0.05, 0.05)(img)
-      mask = transforms.RandomHorizontalFlip()(mask)
-      mask = mask.rotate(random.randint(0,45), expand=True)
-      mask = mask.filter(ImageFilter.MaxFilter(3))
+    mask_path = os.path.dirname(self.mask[index]) + '.zip'
+    mask_name = os.path.basename(self.mask[index])
+    mask = ZipReader.imread(mask_path, mask_name).convert('L')
+    
     img = img.resize((self.w, self.h))
     mask = mask.resize((self.w, self.h), Image.NEAREST)
     return F.to_tensor(img)*2-1., F.to_tensor(mask), img_name

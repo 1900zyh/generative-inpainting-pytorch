@@ -5,7 +5,7 @@
         "name": "celebahq", 
         "zip_root": "../../data",
         "flist_root": "../flist",
-        "mask": "square",
+        "mask": "pconv",
         "extend": 5,
         "w": 512,
         "h": 512
